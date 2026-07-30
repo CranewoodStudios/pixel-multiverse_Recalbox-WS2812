@@ -30,6 +30,12 @@ Run Python syntax checks:
 python3 -m py_compile recalbox/pm_daemon.py tools/test_leds.py
 ```
 
+Run unit tests when reconnect behavior changes:
+
+```sh
+python3 -m unittest tests.test_usb_reconnect
+```
+
 ## Manual Runtime Checks
 
 On Recalbox, after deployment and daemon startup:
@@ -40,6 +46,10 @@ sh /recalbox/share/pixel-multiverse/pmctl game-start
 sh /recalbox/share/pixel-multiverse/pmctl attract-on
 sh /recalbox/share/pixel-multiverse/pmctl off
 ```
+
+USB reconnect checks should include daemon startup without the controller
+connected, issuing commands while disconnected, reconnecting or resetting the
+controller, and confirming the latest LED state is sent after reconnect.
 
 Manual USB CDC frame testing is available through:
 

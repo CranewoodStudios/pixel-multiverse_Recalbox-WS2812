@@ -63,12 +63,17 @@ On startup the daemon:
 1. Loads `systems.json`.
 2. Loads `buttons.json`.
 3. Creates `/tmp/pm.fifo` when needed.
-4. Auto-detects a serial device, preferring `/dev/serial/by-id` entries whose
-   names include Picade, Pimoroni, or Max.
-5. Opens the FIFO and enters the polling loop.
+4. Opens the FIFO and enters the polling loop.
+5. Attempts to auto-detect and open a serial device, preferring
+   `/dev/serial/by-id` entries whose names include Picade, Pimoroni, or Max.
+
+The daemon remains running if no USB CDC serial device is available. It retries
+serial discovery periodically while continuing to process FIFO commands. The
+latest intended LED frame is retained and resent when USB reconnects.
 
 The daemon handles `SIGINT` and `SIGTERM` by leaving the polling loop, sending
-an all-off frame, closing the serial port, and closing the FIFO handles.
+an all-off frame when possible, closing the serial port, and closing the FIFO
+handles.
 
 ## Runtime State
 
@@ -86,8 +91,8 @@ shutdown/reboot/off -> immediate output, then previous idle may continue
 ```
 
 Known future work, such as adding a formal state machine, non-blocking
-animations, persistent off/shutdown states, and serial reconnect, should be kept
-as separate functional changes.
+animations, and persistent off/shutdown states, should be kept as separate
+functional changes.
 
 ## Deployment Architecture
 

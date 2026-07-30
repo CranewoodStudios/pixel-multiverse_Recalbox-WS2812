@@ -10,6 +10,9 @@ NUM_LEDS = 7
 ORDER = list(range(NUM_LEDS))      # change if your physical order differs
 BRIGHT_LIMIT = 170                 # cap brightness (0..255)
 FPS = 60
+SERIAL_BAUD = 115200
+SERIAL_TIMEOUT = 0.05
+RECONNECT_INTERVAL = 2.0
 FIFO_PATH = "/tmp/pm.fifo"
 SYSTEMS_JSON = "/recalbox/share/pixel-multiverse/systems.json"
 BUTTONS_JSON = "/recalbox/share/pixel-multiverse/buttons.json"
@@ -44,9 +47,15 @@ def pack_colors(cols):
         payload += bytes((_clamp(b), _clamp(g), _clamp(r), _clamp(br)))
     return HEADER + payload
 
-def send_colors(ser, cols):
+def _mapped_colors(cols):
     mapped = [cols[src] if src < len(cols) else (0,0,0,0) for src in ORDER]
-    ser.write(pack_colors(mapped)); ser.flush()
+    return mapped
+
+def send_colors(usb, cols):
+    if hasattr(usb, "send_colors"):
+        return usb.send_colors(cols)
+    usb.write(pack_colors(_mapped_colors(cols))); usb.flush()
+    return True
 
 def all_off(): return [(0,0,0,0)] * NUM_LEDS
 def solid(b,g,r,br): return [(b,g,r,_clamp(min(br,BRIGHT_LIMIT)))] * NUM_LEDS
@@ -570,18 +579,105 @@ def find_serial_port():
                 pass
     return None
 
+class SerialConnection:
+    def __init__(self, find_port=find_serial_port, serial_factory=serial.Serial, log_func=log,
+                 reconnect_interval=RECONNECT_INTERVAL):
+        self.find_port = find_port
+        self.serial_factory = serial_factory
+        self.log = log_func
+        self.reconnect_interval = reconnect_interval
+        self.ser = None
+        self.port = None
+        self.next_reconnect_at = 0.0
+        self.last_frame = None
+
+    def is_connected(self):
+        return self.ser is not None
+
+    def ensure_connection(self, now=None):
+        if self.ser is not None:
+            return self.ser
+        if now is None:
+            now = time.monotonic()
+        if now < self.next_reconnect_at:
+            return None
+
+        port = self.find_port()
+        if not port:
+            self.next_reconnect_at = now + self.reconnect_interval
+            self.log("USB reconnect: no compatible serial device found; retrying in",
+                     f"{self.reconnect_interval:.1f}s")
+            return None
+
+        try:
+            self.ser = self.serial_factory(port, SERIAL_BAUD, timeout=SERIAL_TIMEOUT)
+            self.port = port
+            self.next_reconnect_at = 0.0
+            self.log("USB connected:", port)
+        except Exception as e:
+            self.ser = None
+            self.port = None
+            self.next_reconnect_at = now + self.reconnect_interval
+            self.log("USB connect failed for", port, ":", e)
+            return None
+
+        if self.last_frame is not None:
+            self._write_frame(self.last_frame, remember=False)
+        return self.ser
+
+    def disconnect(self, reason=None, now=None):
+        old_port = self.port
+        ser = self.ser
+        self.ser = None
+        self.port = None
+        if now is None:
+            now = time.monotonic()
+        self.next_reconnect_at = now + self.reconnect_interval
+        if ser is not None:
+            try:
+                ser.close()
+            except Exception as e:
+                self.log("USB close failed:", e)
+        if reason:
+            self.log("USB disconnected:", old_port or "unknown port", "-", reason)
+        else:
+            self.log("USB disconnected:", old_port or "unknown port")
+
+    def _write_frame(self, cols, remember=True):
+        if remember:
+            self.last_frame = list(cols)
+        ser = self.ensure_connection()
+        if ser is None:
+            return False
+        try:
+            ser.write(pack_colors(_mapped_colors(cols)))
+            ser.flush()
+            return True
+        except Exception as e:
+            self.disconnect(reason=e)
+            return False
+
+    def send_colors(self, cols):
+        return self._write_frame(cols, remember=True)
+
+    def close(self):
+        ser = self.ser
+        self.ser = None
+        self.port = None
+        if ser is not None:
+            try:
+                ser.close()
+            except Exception as e:
+                self.log("USB close failed:", e)
+
 # ---------- Main ----------
 def main():
     load_config()
     load_buttons_config()
     ensure_fifo()
 
-    port = find_serial_port()
-    if not port:
-        log("ERROR: no serial port found (is the Picade Max connected & code.py running?)")
-        return
-    ser = serial.Serial(port, 115200, timeout=0.05)
-    log("daemon started; PORT =", port, "FIFO =", FIFO_PATH)
+    usb = SerialConnection()
+    log("daemon started; FIFO =", FIFO_PATH)
 
     current_idle = idle_menu()
     last_idle = 0.0
@@ -592,6 +688,7 @@ def main():
 
     try:
         while running:
+            usb.ensure_connection(time.monotonic())
             events = poll.poll(50)  # 50ms
             if events:
                 try:
@@ -617,25 +714,25 @@ def main():
 
                             if name == "menu":
                                 accent = system_accent(syskey)
-                                anim_menu_pulse(ser, accent=accent, seconds=2.0)
+                                anim_menu_pulse(usb, accent=accent, seconds=2.0)
                                 current_idle = idle_menu(accent=accent)
 
                             elif name == "game-start":
-                                anim_game_start(ser, system_key=syskey, rom_key=romkey)
+                                anim_game_start(usb, system_key=syskey, rom_key=romkey)
                                 current_idle = idle_menu(accent=system_accent(syskey))
 
                             elif name == "game-end":
-                                anim_game_end(ser)
+                                anim_game_end(usb)
                                 current_idle = idle_menu(accent=system_accent(syskey))
 
                             elif name == "shutdown":
-                                anim_shutdown(ser)
+                                anim_shutdown(usb)
 
                             elif name == "reboot":
-                                anim_reboot(ser)
+                                anim_reboot(usb)
 
                             elif name in ("settings-changed","controls-changed"):
-                                anim_settings_changed(ser)
+                                anim_settings_changed(usb)
 
                             elif name == "attract-on":
                                 current_idle = idle_attract(mode=default_attract_mode())
@@ -645,10 +742,10 @@ def main():
 
                             elif name == "solid":
                                 b=int(evt.get("b",0)); g=int(evt.get("g",0)); r=int(evt.get("r",0)); br=int(evt.get("br",24))
-                                send_colors(ser, solid(b,g,r,br))
+                                send_colors(usb, solid(b,g,r,br))
 
                             elif name == "off":
-                                send_colors(ser, all_off())
+                                send_colors(usb, all_off())
 
                         last_idle = 0.0  # next idle immediately
 
@@ -656,10 +753,12 @@ def main():
                 try: cols = next(current_idle)
                 except StopIteration:
                     current_idle = idle_menu(); cols = next(current_idle)
-                send_colors(ser, cols); last_idle = time.monotonic()
+                send_colors(usb, cols); last_idle = time.monotonic()
 
     finally:
-        try: send_colors(ser, all_off()); ser.close()
+        try:
+            send_colors(usb, all_off())
+            usb.close()
         except Exception: pass
         try:
             poll.unregister(rdr); rdr.close(); dummy_w.close()
@@ -669,4 +768,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

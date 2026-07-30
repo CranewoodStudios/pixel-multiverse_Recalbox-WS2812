@@ -88,6 +88,7 @@ If LEDs do not respond:
 - Confirm the compatible Picade Max controller is connected.
 - Confirm the firmware exposes a USB CDC serial device.
 - Check `/var/log/pm_daemon.log`.
+- Look for `USB reconnect`, `USB connected`, or `USB disconnected` messages.
 - Confirm `/tmp/pm.fifo` exists after daemon startup.
 - Run `sh /recalbox/share/pixel-multiverse/pmctl menu` and check for FIFO
   errors.

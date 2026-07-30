@@ -32,6 +32,11 @@ Auto-detection currently checks `/dev/serial/by-id` for names containing
 Picade, Pimoroni, or Max, then falls back to `/dev/ttyACM0` and
 `/dev/ttyACM1`.
 
+The daemon does not require USB to be present at startup. If the serial device
+is missing or a write fails, the daemon closes the current connection, keeps
+processing FIFO commands, retries discovery on a short rate-limited interval,
+and resends the latest intended LED frame after reconnecting.
+
 ## Compatibility Boundary
 
 This document describes only the host-side bytes sent by this repository. The
