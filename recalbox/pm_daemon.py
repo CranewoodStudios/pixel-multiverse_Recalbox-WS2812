@@ -13,6 +13,8 @@ FPS = 60
 SERIAL_BAUD = 115200
 SERIAL_TIMEOUT = 0.05
 RECONNECT_INTERVAL = 2.0
+FADE_FPS = 50
+FIXED_STATE_FADE_MS = 350
 FIFO_PATH = "/tmp/pm.fifo"
 SYSTEMS_JSON = "/recalbox/share/pixel-multiverse/systems.json"
 BUTTONS_JSON = "/recalbox/share/pixel-multiverse/buttons.json"
@@ -59,6 +61,74 @@ def send_colors(usb, cols):
 
 def all_off(): return [(0,0,0,0)] * NUM_LEDS
 def solid(b,g,r,br): return [(b,g,r,_clamp(min(br,BRIGHT_LIMIT)))] * NUM_LEDS
+
+def normalize_frame(cols):
+    frame = list(cols[:NUM_LEDS])
+    while len(frame) < NUM_LEDS:
+        frame.append((0,0,0,0))
+    return frame
+
+def blend_frames(start_frame, target_frame, t):
+    t = 0.0 if t < 0.0 else 1.0 if t > 1.0 else t
+    frame = []
+    for start, target in zip(normalize_frame(start_frame), normalize_frame(target_frame)):
+        sb,sg,sr,sbr = start
+        tb,tg,tr,tbr = target
+        frame.append((
+            _clamp(int(lerp(sb, tb, t))),
+            _clamp(int(lerp(sg, tg, t))),
+            _clamp(int(lerp(sr, tr, t))),
+            _clamp(int(lerp(sbr, tbr, t))),
+        ))
+    return frame
+
+class FrameOutput:
+    def __init__(self, usb, fps=FADE_FPS):
+        self.usb = usb
+        self.fps = fps
+        self.current_frame = all_off()
+        self.fade = None
+        self.next_update_at = 0.0
+
+    def _send(self, cols):
+        frame = normalize_frame(cols)
+        self.current_frame = frame
+        return self.usb.send_colors(frame)
+
+    def send_colors(self, cols):
+        self.fade = None
+        return self._send(cols)
+
+    def start_fade(self, target_frame, ms_total=FIXED_STATE_FADE_MS, now=None):
+        if now is None:
+            now = time.monotonic()
+        duration = max(0.001, ms_total / 1000.0)
+        self.fade = {
+            "start": list(self.current_frame),
+            "target": normalize_frame(target_frame),
+            "start_at": now,
+            "duration": duration,
+        }
+        self.next_update_at = now
+
+    def update(self, now=None):
+        if self.fade is None:
+            return False
+        if now is None:
+            now = time.monotonic()
+        if now < self.next_update_at:
+            return False
+
+        elapsed = now - self.fade["start_at"]
+        t = elapsed / self.fade["duration"]
+        frame = blend_frames(self.fade["start"], self.fade["target"], t)
+        self._send(frame)
+
+        if t >= 1.0:
+            self.fade = None
+        else:
+            self.next_update_at = now + (1.0 / self.fps)
+        return True
 
 STATE_MENU = "MENU"
 STATE_GAME_RUNNING = "GAME_RUNNING"
@@ -118,10 +188,13 @@ def fixed_frame_for_state(state):
         return solid(b,g,r,br)
     return None
 
-def send_state_frame(usb, state):
+def send_state_frame(usb, state, fade=False):
     frame = fixed_frame_for_state(state)
     if frame is not None:
-        send_colors(usb, frame)
+        if fade and hasattr(usb, "start_fade"):
+            usb.start_fade(frame)
+        else:
+            send_colors(usb, frame)
 
 def read_es_state(path=ES_STATE):
     out = {}
@@ -740,6 +813,7 @@ def main():
     ensure_fifo()
 
     usb = SerialConnection()
+    output = FrameOutput(usb)
     log("daemon started; FIFO =", FIFO_PATH)
 
     current_state = make_state(STATE_MENU)
@@ -778,12 +852,12 @@ def main():
 
                             if name == "menu":
                                 accent = system_accent(syskey)
-                                anim_menu_pulse(usb, accent=accent, seconds=2.0)
+                                anim_menu_pulse(output, accent=accent, seconds=2.0)
                                 current_state = set_state(current_state, make_state(STATE_MENU, system_key=syskey))
                                 current_idle = idle_for_state(current_state)
 
                             elif name == "game-start":
-                                anim_game_start(usb, system_key=syskey, rom_key=romkey)
+                                anim_game_start(output, system_key=syskey, rom_key=romkey)
                                 current_state = set_state(
                                     current_state,
                                     make_state(STATE_GAME_RUNNING, system_key=syskey, rom_key=romkey),
@@ -791,25 +865,25 @@ def main():
                                 current_idle = idle_for_state(current_state)
 
                             elif name == "game-end":
-                                anim_game_end(usb)
+                                anim_game_end(output)
                                 current_state = set_state(current_state, make_state(STATE_MENU, system_key=syskey))
                                 current_idle = idle_for_state(current_state)
 
                             elif name == "shutdown":
-                                anim_shutdown(usb)
+                                anim_shutdown(output)
                                 current_state = set_state(current_state, make_state(STATE_SHUTDOWN))
                                 current_idle = idle_for_state(current_state)
-                                send_state_frame(usb, current_state)
+                                send_state_frame(output, current_state)
 
                             elif name == "reboot":
-                                anim_reboot(usb)
+                                anim_reboot(output)
                                 current_state = set_state(current_state, make_state(STATE_REBOOT))
                                 current_idle = idle_for_state(current_state)
-                                send_state_frame(usb, current_state)
+                                send_state_frame(output, current_state)
 
                             elif name in ("settings-changed","controls-changed"):
-                                anim_settings_changed(usb)
-                                send_state_frame(usb, current_state)
+                                anim_settings_changed(output)
+                                send_state_frame(output, current_state)
 
                             elif name == "attract-on":
                                 current_state = set_state(current_state, make_state(STATE_ATTRACT))
@@ -826,26 +900,29 @@ def main():
                                     make_state(STATE_SOLID, color=(b,g,r,br)),
                                 )
                                 current_idle = idle_for_state(current_state)
-                                send_state_frame(usb, current_state)
+                                send_state_frame(output, current_state, fade=True)
 
                             elif name == "off":
                                 current_state = set_state(current_state, make_state(STATE_OFF))
                                 current_idle = idle_for_state(current_state)
-                                send_state_frame(usb, current_state)
+                                send_state_frame(output, current_state, fade=True)
 
                         last_idle = 0.0  # next idle immediately
 
-            if current_idle is not None and time.monotonic() - last_idle >= (1.0/30.0):
+            now = time.monotonic()
+            output.update(now)
+
+            if current_idle is not None and now - last_idle >= (1.0/30.0):
                 try: cols = next(current_idle)
                 except StopIteration:
                     current_state = set_state(current_state, make_state(STATE_MENU))
                     current_idle = idle_for_state(current_state)
                     cols = next(current_idle)
-                send_colors(usb, cols); last_idle = time.monotonic()
+                send_colors(output, cols); last_idle = time.monotonic()
 
     finally:
         try:
-            send_colors(usb, all_off())
+            send_colors(output, all_off())
             usb.close()
         except Exception: pass
         try:

@@ -119,6 +119,18 @@ Known future work, such as non-blocking animations, interruptible fades, and
 live configuration reload validation, should be kept as separate functional
 changes.
 
+## Frame Output And Fading
+
+The daemon generates logical LED frames as `(B, G, R, brightness)` tuples.
+Brightness is applied by frame generation and configuration parsing before a
+frame is packed for USB. The host does not apply a second global brightness
+scale during transmission.
+
+Frame output tracks the last generated frame. Persistent fixed states such as
+`SOLID` and `OFF` can start an interruptible fade from that tracked frame to the
+target frame. Fade updates are advanced from the main daemon loop using
+monotonic time and return control immediately after at most one generated frame.
+
 ## Deployment Architecture
 
 The repository keeps source files under `recalbox/`. The deployed Recalbox
