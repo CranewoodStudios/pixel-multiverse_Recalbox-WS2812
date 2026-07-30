@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+*.log
+*.fifo
+
+.agents/
+.codex/
+
+pm.fifo
+recalbox.log
