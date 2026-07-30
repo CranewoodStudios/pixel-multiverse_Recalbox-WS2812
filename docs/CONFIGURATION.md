@@ -74,8 +74,7 @@ Example:
 `buttons.enabled` allows the daemon to use button-specific configuration.
 
 `buttons.num_leds` updates the daemon's LED count during configuration load.
-The current implementation does not rebuild the physical `ORDER` list after
-this value changes; that is a known future functional improvement.
+The daemon rebuilds its physical LED order after this value changes.
 
 `buttons.led_map` maps logical two-dimensional button coordinates to LED
 indexes:
@@ -93,3 +92,17 @@ in the current daemon are:
 - `sequential_colors`
 
 Pattern parameters are passed to the matching daemon pattern generator.
+
+## Live Reload
+
+The daemon accepts:
+
+```sh
+pmctl reload-config
+```
+
+Reload reads both JSON files into temporary structures first. If parsing or
+validation fails, the previous valid runtime configuration remains active and a
+failure is logged. A successful reload replaces systems configuration, button
+configuration, LED count, LED order, coordinate mappings, and attract pattern
+data together.

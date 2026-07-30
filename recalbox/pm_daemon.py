@@ -314,50 +314,85 @@ _buttons_cfg = {}
 _coord_map = {}
 _pattern_queue = []
 
-def load_config():
-    global _cfg
+def _read_json_config(path, default_value):
     try:
-        with open(SYSTEMS_JSON, "r") as f:
-            _cfg = json.load(f)
-        log("loaded systems.json:", ",".join(sorted(_cfg.keys())))
-    except Exception as e:
-        log("systems.json not loaded:", e)
-        _cfg = {}
-
-def load_buttons_config():
-    """Load button configuration from JSON file."""
-    global _buttons_cfg, _coord_map, _pattern_queue, NUM_LEDS
-    try:
-        with open(BUTTONS_JSON, "r") as f:
-            _buttons_cfg = json.load(f)
-        btn_cfg = _buttons_cfg.get("buttons", {})
-        
-        # Update NUM_LEDS from config if specified
-        if btn_cfg.get("enabled") and btn_cfg.get("num_leds"):
-            NUM_LEDS = btn_cfg["num_leds"]
-        
-        # Parse led_map to create coord_map
-        led_map = btn_cfg.get("led_map", [])
-        _coord_map = {}
-        for item in led_map:
-            coord = tuple(item.get("coord", []))
-            value = item.get("value")
-            if coord and value is not None:
-                _coord_map[coord] = value
-        
-        # Parse attract_program to create pattern_queue
-        _pattern_queue = []
-        for pattern_cfg in btn_cfg.get("attract_program", []):
-            pattern = pattern_cfg.get("pattern")
-            params = pattern_cfg.get("params", {})
-            if pattern and params:
-                _pattern_queue.append((pattern, params))
-        
-        log("loaded buttons.json:", f"{len(_coord_map)} LEDs mapped, {len(_pattern_queue)} patterns")
+        with open(path, "r") as f:
+            data = json.load(f)
     except FileNotFoundError:
-        log("buttons.json not found at", BUTTONS_JSON)
+        log(os.path.basename(path), "not found at", path)
+        return default_value
+    if not isinstance(data, dict):
+        raise ValueError(f"{path} must contain a JSON object")
+    return data
+
+def _build_button_derived(buttons_cfg):
+    btn_cfg = buttons_cfg.get("buttons", {})
+    if btn_cfg and not isinstance(btn_cfg, dict):
+        raise ValueError("buttons must be an object")
+
+    num_leds = NUM_LEDS
+    if btn_cfg.get("enabled") and btn_cfg.get("num_leds") is not None:
+        num_leds = int(btn_cfg["num_leds"])
+        if num_leds <= 0:
+            raise ValueError("buttons.num_leds must be greater than zero")
+
+    coord_map = {}
+    led_map = btn_cfg.get("led_map", [])
+    if led_map and not isinstance(led_map, list):
+        raise ValueError("buttons.led_map must be a list")
+    for item in led_map:
+        if not isinstance(item, dict):
+            raise ValueError("buttons.led_map entries must be objects")
+        coord = tuple(item.get("coord", []))
+        value = item.get("value")
+        if coord and value is not None:
+            led_idx = int(value)
+            if led_idx < 0:
+                raise ValueError("LED indexes must be non-negative")
+            coord_map[coord] = led_idx
+
+    pattern_queue = []
+    attract_program = btn_cfg.get("attract_program", [])
+    if attract_program and not isinstance(attract_program, list):
+        raise ValueError("buttons.attract_program must be a list")
+    for pattern_cfg in attract_program:
+        if not isinstance(pattern_cfg, dict):
+            raise ValueError("buttons.attract_program entries must be objects")
+        pattern = pattern_cfg.get("pattern")
+        params = pattern_cfg.get("params", {})
+        if pattern and params:
+            if not isinstance(params, dict):
+                raise ValueError("pattern params must be objects")
+            pattern_queue.append((pattern, params))
+
+    return num_leds, list(range(num_leds)), coord_map, pattern_queue
+
+def apply_runtime_config(systems_cfg, buttons_cfg, num_leds, order, coord_map, pattern_queue):
+    global _cfg, _buttons_cfg, _coord_map, _pattern_queue, NUM_LEDS, ORDER
+    _cfg = systems_cfg
+    _buttons_cfg = buttons_cfg
+    NUM_LEDS = num_leds
+    ORDER = order
+    _coord_map = coord_map
+    _pattern_queue = pattern_queue
+
+def reload_runtime_config():
+    systems_cfg = _read_json_config(SYSTEMS_JSON, {})
+    buttons_cfg = _read_json_config(BUTTONS_JSON, {})
+    num_leds, order, coord_map, pattern_queue = _build_button_derived(buttons_cfg)
+    apply_runtime_config(systems_cfg, buttons_cfg, num_leds, order, coord_map, pattern_queue)
+    log("loaded systems.json:", ",".join(sorted(_cfg.keys())))
+    log("loaded buttons.json:", f"{len(_coord_map)} LEDs mapped, {len(_pattern_queue)} patterns")
+    return True
+
+def reload_runtime_config_safely():
+    try:
+        reload_runtime_config()
+        log("configuration reload complete")
+        return True
     except Exception as e:
-        log("buttons.json not loaded:", e)
+        log("configuration reload failed; keeping previous configuration:", e)
+        return False
 
 def get_system_key(evt):
     sysid = (evt.get("system") or "").lower()
@@ -855,8 +890,7 @@ class SerialConnection:
 
 # ---------- Main ----------
 def main():
-    load_config()
-    load_buttons_config()
+    reload_runtime_config_safely()
     ensure_fifo()
 
     usb = SerialConnection()
@@ -891,8 +925,9 @@ def main():
                         name = (evt.get("event") or "").lower()
 
                         if name == "reload-config":
-                            load_config()
-                            load_buttons_config()
+                            if reload_runtime_config_safely():
+                                current_idle = idle_for_state(current_state)
+                                send_state_frame(output, current_state)
 
                         else:
                             syskey = get_system_key(evt)
