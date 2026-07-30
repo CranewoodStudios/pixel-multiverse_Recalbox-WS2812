@@ -77,22 +77,47 @@ handles.
 
 ## Runtime State
 
-The current implementation is event-driven with an idle generator rather than a
-formal state machine. Events can switch the idle generator between menu and
-attract patterns or run blocking transition animations before idle output
-continues.
+The daemon keeps one authoritative current state. Commands received through the
+FIFO request transitions into that state, and the state determines whether idle
+output continues or a fixed frame should remain displayed.
 
-```text
-startup -> menu idle
-menu/game-end/attract-off -> menu idle
-attract-on -> attract idle
-game-start -> game-start animation -> menu idle with system accent
-shutdown/reboot/off -> immediate output, then previous idle may continue
-```
+Current states:
 
-Known future work, such as adding a formal state machine, non-blocking
-animations, and persistent off/shutdown states, should be kept as separate
-functional changes.
+- `MENU`: menu idle breathing output, optionally using the current system
+  accent.
+- `GAME_RUNNING`: game-running idle breathing output using the current system
+  accent when available.
+- `ATTRACT`: attract idle output from `buttons.json` pattern configuration or
+  the default attract mode.
+- `SOLID`: persistent solid colour from `pmctl solid B G R BR`.
+- `OFF`: persistent all-off output.
+- `SHUTDOWN`: persistent all-off output after the shutdown animation.
+- `REBOOT`: persistent all-off output after the reboot animation.
+
+Current command transitions:
+
+| Command | Entry behavior | Resulting state |
+| --- | --- | --- |
+| startup | load configuration and open FIFO | `MENU` |
+| `menu` | menu pulse animation | `MENU` |
+| `game-start` | game start layout or wipe animation | `GAME_RUNNING` |
+| `game-end` | game end animation | `MENU` |
+| `attract-on` | none | `ATTRACT` |
+| `attract-off` | none | `MENU` |
+| `solid` | send requested solid frame | `SOLID` |
+| `off` | send all-off frame | `OFF` |
+| `shutdown` | shutdown animation, then all-off | `SHUTDOWN` |
+| `reboot` | reboot animation, then all-off | `REBOOT` |
+| `settings-changed` / `controls-changed` | notification blink | previous state |
+| `reload-config` | reload configuration | previous state |
+
+Duplicate state requests are harmless. They do not create a second state object
+or change the retained state identity, although existing command entry
+animations may still run before the duplicate transition is detected.
+
+Known future work, such as non-blocking animations, interruptible fades, and
+live configuration reload validation, should be kept as separate functional
+changes.
 
 ## Deployment Architecture
 

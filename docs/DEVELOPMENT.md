@@ -30,10 +30,10 @@ Run Python syntax checks:
 python3 -m py_compile recalbox/pm_daemon.py tools/test_leds.py
 ```
 
-Run unit tests when reconnect behavior changes:
+Run unit tests when daemon behavior changes:
 
 ```sh
-python3 -m unittest tests.test_usb_reconnect
+python3 -m unittest discover tests
 ```
 
 ## Manual Runtime Checks

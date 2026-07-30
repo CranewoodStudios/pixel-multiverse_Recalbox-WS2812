@@ -60,6 +60,69 @@ def send_colors(usb, cols):
 def all_off(): return [(0,0,0,0)] * NUM_LEDS
 def solid(b,g,r,br): return [(b,g,r,_clamp(min(br,BRIGHT_LIMIT)))] * NUM_LEDS
 
+STATE_MENU = "MENU"
+STATE_GAME_RUNNING = "GAME_RUNNING"
+STATE_ATTRACT = "ATTRACT"
+STATE_SHUTDOWN = "SHUTDOWN"
+STATE_REBOOT = "REBOOT"
+STATE_OFF = "OFF"
+STATE_SOLID = "SOLID"
+
+def make_state(name, system_key="", rom_key="", color=None):
+    return {
+        "name": name,
+        "system_key": system_key or "",
+        "rom_key": rom_key or "",
+        "color": color,
+    }
+
+def state_label(state):
+    if not state:
+        return "NONE"
+    name = state.get("name", "UNKNOWN")
+    system_key = state.get("system_key") or ""
+    if system_key:
+        return f"{name}({system_key})"
+    return name
+
+def states_equal(left, right):
+    return (
+        left and right and
+        left.get("name") == right.get("name") and
+        left.get("system_key") == right.get("system_key") and
+        left.get("rom_key") == right.get("rom_key") and
+        left.get("color") == right.get("color")
+    )
+
+def set_state(current_state, next_state, log_func=log):
+    if states_equal(current_state, next_state):
+        log_func("state unchanged:", state_label(next_state))
+        return current_state
+    log_func("state change:", state_label(current_state), "->", state_label(next_state))
+    return next_state
+
+def idle_for_state(state):
+    name = state.get("name")
+    if name == STATE_ATTRACT:
+        return idle_attract(mode=default_attract_mode())
+    if name in (STATE_MENU, STATE_GAME_RUNNING):
+        return idle_menu(accent=system_accent(state.get("system_key")))
+    return None
+
+def fixed_frame_for_state(state):
+    name = state.get("name")
+    if name in (STATE_OFF, STATE_SHUTDOWN, STATE_REBOOT):
+        return all_off()
+    if name == STATE_SOLID:
+        b,g,r,br = state.get("color") or (0,0,0,0)
+        return solid(b,g,r,br)
+    return None
+
+def send_state_frame(usb, state):
+    frame = fixed_frame_for_state(state)
+    if frame is not None:
+        send_colors(usb, frame)
+
 def read_es_state(path=ES_STATE):
     out = {}
     try:
@@ -679,7 +742,8 @@ def main():
     usb = SerialConnection()
     log("daemon started; FIFO =", FIFO_PATH)
 
-    current_idle = idle_menu()
+    current_state = make_state(STATE_MENU)
+    current_idle = idle_for_state(current_state)
     last_idle = 0.0
 
     rdr, dummy_w = open_fifo_reader()
@@ -715,44 +779,68 @@ def main():
                             if name == "menu":
                                 accent = system_accent(syskey)
                                 anim_menu_pulse(usb, accent=accent, seconds=2.0)
-                                current_idle = idle_menu(accent=accent)
+                                current_state = set_state(current_state, make_state(STATE_MENU, system_key=syskey))
+                                current_idle = idle_for_state(current_state)
 
                             elif name == "game-start":
                                 anim_game_start(usb, system_key=syskey, rom_key=romkey)
-                                current_idle = idle_menu(accent=system_accent(syskey))
+                                current_state = set_state(
+                                    current_state,
+                                    make_state(STATE_GAME_RUNNING, system_key=syskey, rom_key=romkey),
+                                )
+                                current_idle = idle_for_state(current_state)
 
                             elif name == "game-end":
                                 anim_game_end(usb)
-                                current_idle = idle_menu(accent=system_accent(syskey))
+                                current_state = set_state(current_state, make_state(STATE_MENU, system_key=syskey))
+                                current_idle = idle_for_state(current_state)
 
                             elif name == "shutdown":
                                 anim_shutdown(usb)
+                                current_state = set_state(current_state, make_state(STATE_SHUTDOWN))
+                                current_idle = idle_for_state(current_state)
+                                send_state_frame(usb, current_state)
 
                             elif name == "reboot":
                                 anim_reboot(usb)
+                                current_state = set_state(current_state, make_state(STATE_REBOOT))
+                                current_idle = idle_for_state(current_state)
+                                send_state_frame(usb, current_state)
 
                             elif name in ("settings-changed","controls-changed"):
                                 anim_settings_changed(usb)
+                                send_state_frame(usb, current_state)
 
                             elif name == "attract-on":
-                                current_idle = idle_attract(mode=default_attract_mode())
+                                current_state = set_state(current_state, make_state(STATE_ATTRACT))
+                                current_idle = idle_for_state(current_state)
 
                             elif name == "attract-off":
-                                current_idle = idle_menu(accent=system_accent(syskey))
+                                current_state = set_state(current_state, make_state(STATE_MENU, system_key=syskey))
+                                current_idle = idle_for_state(current_state)
 
                             elif name == "solid":
                                 b=int(evt.get("b",0)); g=int(evt.get("g",0)); r=int(evt.get("r",0)); br=int(evt.get("br",24))
-                                send_colors(usb, solid(b,g,r,br))
+                                current_state = set_state(
+                                    current_state,
+                                    make_state(STATE_SOLID, color=(b,g,r,br)),
+                                )
+                                current_idle = idle_for_state(current_state)
+                                send_state_frame(usb, current_state)
 
                             elif name == "off":
-                                send_colors(usb, all_off())
+                                current_state = set_state(current_state, make_state(STATE_OFF))
+                                current_idle = idle_for_state(current_state)
+                                send_state_frame(usb, current_state)
 
                         last_idle = 0.0  # next idle immediately
 
-            if time.monotonic() - last_idle >= (1.0/30.0):
+            if current_idle is not None and time.monotonic() - last_idle >= (1.0/30.0):
                 try: cols = next(current_idle)
                 except StopIteration:
-                    current_idle = idle_menu(); cols = next(current_idle)
+                    current_state = set_state(current_state, make_state(STATE_MENU))
+                    current_idle = idle_for_state(current_state)
+                    cols = next(current_idle)
                 send_colors(usb, cols); last_idle = time.monotonic()
 
     finally:
