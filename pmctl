@@ -1,0 +1,23 @@
+#!/bin/sh
+# pmctl — write JSON events into FIFO (/tmp/pm.fifo)
+FIFO=/tmp/pm.fifo
+if [ ! -p "$FIFO" ]; then
+  echo "pmctl: FIFO not ready at $FIFO (is pm_daemon.py running?)" >&2
+  exit 1
+fi
+cmd="$1"; shift
+case "$cmd" in
+  menu|game-start|game-end|shutdown|reboot|settings-changed|controls-changed|attract-on|attract-off|off)
+    printf '{"event":"%s"}\n' "$cmd" > "$FIFO" ;;
+  solid)
+    # pmctl solid B G R BR
+    printf '{"event":"solid","b":%s,"g":%s,"r":%s,"br":%s}\n' "$1" "$2" "$3" "$4" > "$FIFO" ;;
+  reload-config)
+    printf '{"event":"reload-config"}\n' > "$FIFO" ;;
+  *)
+    echo "usage: $0 menu|game-start|game-end|shutdown|reboot|settings-changed|controls-changed|attract-on|attract-off|off|solid B G R BR|reload-config" >&2
+    exit 2 ;;
+esac
+SH
+sed -i 's/\r$//' /recalbox/share/pixel-multiverse/pmctl
+chmod +x /recalbox/share/pixel-multiverse/pmctl

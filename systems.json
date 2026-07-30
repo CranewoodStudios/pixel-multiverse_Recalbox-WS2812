@@ -1,0 +1,28 @@
+{
+  "defaults": {
+    "menu_color": { "b": 0, "g": 32, "r": 64, "br": 28 },
+    "attract": "linear"
+  },
+
+  "snes": {
+    "accent": { "b": 0, "g": 0, "r": 255, "br": 36 },
+    "start_layout": [
+      "#ff0000:100",
+      "#ffffff:100",
+      "#ffffff:30",
+      "#ffffff:30",
+      "#ffffff:30",
+      "#ffffff:30",
+      "#ffffff:30"
+    ],
+    "rom_overrides": {
+      "Super Mario World": {
+        "start_layout": ["#00ff00:100","#ffffff:100","#ffffff:30","#ffffff:30","#ffffff:30","#ffffff:30","#ffffff:30"]
+      }
+    }
+  },
+
+  "nes":  { "accent": { "b": 0,  "g": 0,  "r": 200, "br": 32 } },
+  "mame": { "accent": { "b": 0,  "g": 64, "r": 64,  "br": 32 } },
+  "psx":  { "accent": { "b": 64, "g": 64, "r": 0,   "br": 32 } }
+}
