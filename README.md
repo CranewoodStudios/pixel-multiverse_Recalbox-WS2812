@@ -12,6 +12,18 @@ https://github.com/CranewoodStudios/picade-max-input-WS2812
 
 Do not copy firmware code into this repository.
 
+Pixel Multiverse is maintained by CranewoodStudios and is distributed under the
+MIT License. See `LICENSE` for details.
+
+## Features
+
+- Recalbox and EmulationStation event integration
+- FIFO-based command delivery from lightweight shell hooks to the daemon
+- Game and system colour mapping through JSON configuration
+- Button LED layout configuration and attract animation patterns
+- USB CDC frame output for a compatible Picade Max controller
+- Minimal host-side dependencies for the Recalbox target
+
 ## Current Architecture
 
 ```text
@@ -49,6 +61,15 @@ docs/                   Technical documentation
 archive/                Historical or uncertain files kept for reference
 ```
 
+## Documentation
+
+- `docs/ARCHITECTURE.md` describes the host-side components and event flow.
+- `docs/INSTALLATION.md` describes Recalbox deployment.
+- `docs/CONFIGURATION.md` describes `buttons.json` and `systems.json`.
+- `docs/USB_PROTOCOL.md` describes the host USB CDC frame format.
+- `docs/DEVELOPMENT.md` describes desktop development and checks.
+- `docs/PICADE_INTEGRATION.md` describes the external firmware relationship.
+
 ## Runtime Paths
 
 The current runtime scripts expect deployment under:
@@ -79,4 +100,11 @@ The Recalbox event scripts call:
 - Preserve user configuration during deployment.
 - Keep controller firmware changes in the separate firmware repository.
 
-More detailed documentation is being built out under `docs/`.
+## Support
+
+- Issues: https://github.com/CranewoodStudios/pixel-multiverse_Recalbox-WS2812/issues
+- Discussions: https://github.com/CranewoodStudios/pixel-multiverse_Recalbox-WS2812/discussions
+
+## Attribution
+
+Pixel Multiverse was created and is maintained by CranewoodStudios.

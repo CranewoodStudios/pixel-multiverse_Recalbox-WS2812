@@ -8,5 +8,35 @@ Current frame shape:
 b"multiverse:data" + N * (B, G, R, brightness)
 ```
 
-Detailed framing and compatibility notes should be maintained here without
-duplicating controller firmware implementation details.
+The header is the ASCII byte sequence:
+
+```text
+multiverse:data
+```
+
+Each LED contributes four bytes after the header:
+
+```text
+B G R brightness
+```
+
+For `N` LEDs, the payload after the header is `N * 4` bytes.
+
+## Serial Transport
+
+The daemon opens the selected USB CDC serial device at 115200 baud with a short
+timeout. `PM_PORT` can override auto-detection when it points to an existing
+device path.
+
+Auto-detection currently checks `/dev/serial/by-id` for names containing
+Picade, Pimoroni, or Max, then falls back to `/dev/ttyACM0` and
+`/dev/ttyACM1`.
+
+## Compatibility Boundary
+
+This document describes only the host-side bytes sent by this repository. The
+receiver, RP2040 PIO code, USB HID devices, and WS2812 output implementation
+belong to the separate Picade Max firmware repository.
+
+Future protocol changes should be coordinated with that repository and should
+not be hidden inside cleanup commits.
