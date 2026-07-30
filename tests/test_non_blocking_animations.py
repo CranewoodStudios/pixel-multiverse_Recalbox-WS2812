@@ -45,6 +45,14 @@ class NonBlockingAnimationTests(unittest.TestCase):
         self.assertIs(active, replacement)
         self.assertIsNotNone(active.update(1.0))
 
+    def test_repeat_frame_preserves_configured_delay_without_sleep(self):
+        frame = [(3, 3, 3, 3)] * pm_daemon.NUM_LEDS
+
+        repeated = list(pm_daemon.repeat_frame(frame, seconds=0.1, fps=30))
+
+        self.assertEqual(len(repeated), 3)
+        self.assertEqual(repeated, [frame, frame, frame])
+
 
 if __name__ == "__main__":
     unittest.main()

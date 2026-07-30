@@ -15,6 +15,7 @@ SERIAL_TIMEOUT = 0.05
 RECONNECT_INTERVAL = 2.0
 FADE_FPS = 50
 FIXED_STATE_FADE_MS = 350
+IDLE_FPS = 30
 FIFO_PATH = "/tmp/pm.fifo"
 SYSTEMS_JSON = "/recalbox/share/pixel-multiverse/systems.json"
 BUTTONS_JSON = "/recalbox/share/pixel-multiverse/buttons.json"
@@ -104,6 +105,8 @@ class FrameOutput:
 
     def _send(self, cols):
         frame = normalize_frame(cols)
+        if frame == self.current_frame and getattr(self.usb, "last_frame", None) == frame:
+            return True
         self.current_frame = frame
         return self.usb.send_colors(frame)
 
@@ -277,6 +280,12 @@ class MenuPulseAnimation:
 
 def _fade_level_frames(from_lvl, to_lvl, ms_total):
     return list(fade_all(from_lvl=from_lvl, to_lvl=to_lvl, ms_total=ms_total))
+
+def repeat_frame(cols, seconds, fps=IDLE_FPS):
+    repeats = max(1, int(round(seconds * fps)))
+    frame = normalize_frame(cols)
+    for _ in range(repeats):
+        yield list(frame)
 
 def make_game_start_animation(system_key=None, rom_key=None):
     layout = lookup_start_layout(system_key, rom_key)
@@ -522,7 +531,7 @@ def _pattern_linear(direction, color_on=(0,0,255,40), color_off=(0,0,0,0), delay
     
     # Initialize all LEDs to off color
     cols = [color_off] * NUM_LEDS
-    yield cols
+    yield from repeat_frame(cols, delay)
     
     # Determine iteration order based on direction
     if direction == 'left_to_right':
@@ -530,25 +539,25 @@ def _pattern_linear(direction, color_on=(0,0,255,40), color_off=(0,0,0,0), delay
             for coord, led_idx in _coord_map.items():
                 if coord[0] == x and led_idx < NUM_LEDS:
                     cols[led_idx] = color_on
-            yield cols
+            yield from repeat_frame(cols, delay)
     elif direction == 'right_to_left':
         for x in range(max_x, min_x - 1, -1):
             for coord, led_idx in _coord_map.items():
                 if coord[0] == x and led_idx < NUM_LEDS:
                     cols[led_idx] = color_on
-            yield cols
+            yield from repeat_frame(cols, delay)
     elif direction == 'top_to_bottom':
         for y in range(min_y, max_y + 1):
             for coord, led_idx in _coord_map.items():
                 if coord[1] == y and led_idx < NUM_LEDS:
                     cols[led_idx] = color_on
-            yield cols
+            yield from repeat_frame(cols, delay)
     elif direction == 'bottom_to_top':
         for y in range(max_y, min_y - 1, -1):
             for coord, led_idx in _coord_map.items():
                 if coord[1] == y and led_idx < NUM_LEDS:
                     cols[led_idx] = color_on
-            yield cols
+            yield from repeat_frame(cols, delay)
 
 def _pattern_radial(direction, color_on=(0,0,255,40), color_off=(0,0,0,0), delay=0.05):
     """
@@ -588,13 +597,13 @@ def _pattern_radial(direction, color_on=(0,0,255,40), color_off=(0,0,0,0), delay
     
     # Initialize all LEDs to off color
     cols = [color_off] * NUM_LEDS
-    yield cols
+    yield from repeat_frame(cols, delay)
     
     # Activate LEDs in order
     for angle, coord, led_idx in coord_angles:
         if led_idx < NUM_LEDS:
             cols[led_idx] = color_on
-        yield cols
+        yield from repeat_frame(cols, delay)
 
 def _pattern_circular(direction, color_on=(0,0,255,40), color_off=(0,0,0,0), delay=0.05):
     """
@@ -634,7 +643,7 @@ def _pattern_circular(direction, color_on=(0,0,255,40), color_off=(0,0,0,0), del
     
     # Initialize all LEDs to off color
     cols = [color_off] * NUM_LEDS
-    yield cols
+    yield from repeat_frame(cols, delay)
     
     # Group by distance and activate in steps
     current_distance = None
@@ -643,12 +652,12 @@ def _pattern_circular(direction, color_on=(0,0,255,40), color_off=(0,0,0,0), del
         rounded_distance = round(distance, 1)
         if current_distance != rounded_distance:
             current_distance = rounded_distance
-            yield cols
+            yield from repeat_frame(cols, delay)
         if led_idx < NUM_LEDS:
             cols[led_idx] = color_on
     
     # Yield final frame with all LEDs activated
-    yield cols
+    yield from repeat_frame(cols, delay)
 
 def _pattern_sequential_colors(num_leds=7, dwell_ms=500, fade_steps=60, fade_ms=20, brightness=255):
     """
@@ -681,7 +690,7 @@ def _pattern_sequential_colors(num_leds=7, dwell_ms=500, fade_steps=60, fade_ms=
         # Cycle through each color for this LED
         for color in colors:
             cols[led_idx] = color
-            yield list(cols)  # Yield a copy, not the same list object
+            yield from repeat_frame(cols, dwell_ms / 1000.0)
     
     # After all LEDs complete, fade all to off
     # Create a snapshot of the final state
@@ -700,7 +709,7 @@ def _pattern_sequential_colors(num_leds=7, dwell_ms=500, fade_steps=60, fade_ms=
             else:
                 faded_cols.append((0, 0, 0, 0))
         
-        yield faded_cols
+        yield from repeat_frame(faded_cols, fade_ms / 1000.0)
 
 def idle_menu(accent=None):
     base = accent if accent else default_menu_color()
@@ -787,7 +796,7 @@ def open_fifo_reader(path=FIFO_PATH):
 def find_serial_port():
     # Allow override
     env = os.environ.get("PM_PORT")
-    if env and os.path.exists(env):
+    if env:
         return env
     byid = "/dev/serial/by-id"
     cand = []
@@ -842,20 +851,20 @@ class SerialConnection:
         port = self.find_port()
         if not port:
             self.next_reconnect_at = now + self.reconnect_interval
-            self.log("USB reconnect: no compatible serial device found; retrying in",
-                     f"{self.reconnect_interval:.1f}s")
+            _call_log(self.log, "USB reconnect: no compatible serial device found; retrying in",
+                      f"{self.reconnect_interval:.1f}s", level=logging.DEBUG)
             return None
 
         try:
             self.ser = self.serial_factory(port, SERIAL_BAUD, timeout=SERIAL_TIMEOUT)
             self.port = port
             self.next_reconnect_at = 0.0
-            self.log("USB connected:", port)
+            _call_log(self.log, "USB connected:", port)
         except Exception as e:
             self.ser = None
             self.port = None
             self.next_reconnect_at = now + self.reconnect_interval
-            self.log("USB connect failed for", port, ":", e)
+            _call_log(self.log, "USB connect failed for", port, ":", e, level=logging.WARNING)
             return None
 
         if self.last_frame is not None:
@@ -874,11 +883,12 @@ class SerialConnection:
             try:
                 ser.close()
             except Exception as e:
-                self.log("USB close failed:", e)
+                _call_log(self.log, "USB close failed:", e, level=logging.WARNING)
         if reason:
-            self.log("USB disconnected:", old_port or "unknown port", "-", reason)
+            _call_log(self.log, "USB disconnected:", old_port or "unknown port", "-", reason,
+                      level=logging.WARNING)
         else:
-            self.log("USB disconnected:", old_port or "unknown port")
+            _call_log(self.log, "USB disconnected:", old_port or "unknown port", level=logging.WARNING)
 
     def _write_frame(self, cols, remember=True):
         if remember:
@@ -905,7 +915,7 @@ class SerialConnection:
             try:
                 ser.close()
             except Exception as e:
-                self.log("USB close failed:", e)
+                _call_log(self.log, "USB close failed:", e, level=logging.WARNING)
 
 # ---------- Main ----------
 def main():
@@ -939,7 +949,9 @@ def main():
                     if line:
                         try:
                             evt = json.loads(line)
-                        except Exception:
+                        except Exception as e:
+                            log("malformed FIFO message ignored:", e, "line:", line,
+                                level=logging.WARNING, category="fifo")
                             evt = {}
                         name = (evt.get("event") or "").lower()
 

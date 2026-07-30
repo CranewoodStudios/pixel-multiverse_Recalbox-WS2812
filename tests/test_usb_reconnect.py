@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import unittest
+from unittest import mock
 
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -107,6 +108,10 @@ class SerialConnectionTests(unittest.TestCase):
         self.assertIsNotNone(conn.ensure_connection(now=time.monotonic()))
         self.assertEqual(len(serials), 1)
         self.assertEqual(serials[0].writes, [pm_daemon.pack_colors(pm_daemon._mapped_colors(frame))])
+
+    def test_pm_port_override_is_returned_even_when_absent(self):
+        with mock.patch.dict(os.environ, {"PM_PORT": "/dev/missing-pm-port"}):
+            self.assertEqual(pm_daemon.find_serial_port(), "/dev/missing-pm-port")
 
 
 if __name__ == "__main__":

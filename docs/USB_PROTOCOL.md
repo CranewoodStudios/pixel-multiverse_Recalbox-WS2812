@@ -28,6 +28,10 @@ The daemon opens the selected USB CDC serial device at 115200 baud with a short
 timeout. `PM_PORT` can override auto-detection when it points to an existing
 device path.
 
+When `PM_PORT` is set, the daemon keeps attempting that path on each
+rate-limited reconnect attempt. It does not permanently abandon the override
+because the device was absent or could not be opened once.
+
 Auto-detection currently checks `/dev/serial/by-id` for names containing
 Picade, Pimoroni, or Max, then falls back to `/dev/ttyACM0` and
 `/dev/ttyACM1`.

@@ -12,9 +12,12 @@ import pm_daemon
 class RecordingUsb:
     def __init__(self):
         self.frames = []
+        self.last_frame = None
 
     def send_colors(self, cols):
-        self.frames.append(list(cols))
+        frame = list(cols)
+        self.frames.append(frame)
+        self.last_frame = frame
         return True
 
 
@@ -59,6 +62,25 @@ class FadeEngineTests(unittest.TestCase):
         output.update(now=2.0)
 
         self.assertEqual(usb.frames[-1], [(25, 25, 25, 25)] * pm_daemon.NUM_LEDS)
+
+    def test_duplicate_frame_is_not_resent_when_usb_has_same_intent(self):
+        usb = RecordingUsb()
+        output = pm_daemon.FrameOutput(usb)
+        frame = [(1, 2, 3, 4)] * pm_daemon.NUM_LEDS
+
+        output.send_colors(frame)
+        output.send_colors(frame)
+
+        self.assertEqual(usb.frames, [frame])
+
+    def test_initial_duplicate_frame_is_retained_for_disconnected_usb(self):
+        usb = RecordingUsb()
+        output = pm_daemon.FrameOutput(usb)
+        frame = pm_daemon.all_off()
+
+        output.send_colors(frame)
+
+        self.assertEqual(usb.frames, [frame])
 
 
 if __name__ == "__main__":

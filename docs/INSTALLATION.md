@@ -97,6 +97,9 @@ If LEDs do not respond:
 - Look for `USB reconnect`, `USB connected`, or `USB disconnected` messages.
 - Useful log categories include `pm.daemon`, `pm.fifo`, `pm.usb`,
   `pm.config`, `pm.animation`, and `pm.state`.
+- Examples include `pm.daemon` startup/shutdown messages, `pm.usb` connection
+  and write-failure messages, `pm.config` reload success/failure messages,
+  `pm.state` transition messages, and `pm.fifo` malformed-message warnings.
 - Confirm `/tmp/pm.fifo` exists after daemon startup.
 - Run `sh /recalbox/share/pixel-multiverse/pmctl menu` and check for FIFO
   errors.
