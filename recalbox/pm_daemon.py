@@ -196,6 +196,106 @@ def send_state_frame(usb, state, fade=False):
         else:
             send_colors(usb, frame)
 
+class TimedFramesAnimation:
+    def __init__(self, frames, frame_ms=40, hold_last_ms=0):
+        self.frames = [normalize_frame(frame) for frame in frames]
+        self.frame_interval = max(0.001, frame_ms / 1000.0)
+        self.hold_last = max(0.0, hold_last_ms / 1000.0)
+        self.started_at = None
+        self.last_index = None
+        self.finished = False
+        self.current_frame = None
+
+    def update(self, now):
+        if self.finished or not self.frames:
+            self.finished = True
+            return None
+        if self.started_at is None:
+            self.started_at = now
+        elapsed = now - self.started_at
+        index = int(elapsed / self.frame_interval)
+        if index >= len(self.frames):
+            end_at = (len(self.frames) - 1) * self.frame_interval + self.hold_last
+            if elapsed >= end_at:
+                self.finished = True
+            index = len(self.frames) - 1
+        if index == self.last_index:
+            return None
+        self.last_index = index
+        self.current_frame = self.frames[index]
+        return self.current_frame
+
+    def is_finished(self):
+        return self.finished
+
+class MenuPulseAnimation:
+    def __init__(self, accent=None, seconds=2.0, fps=FPS):
+        self.base = accent if accent else default_menu_color()
+        self.seconds = seconds
+        self.frame_interval = 1.0 / fps
+        self.started_at = None
+        self.next_update_at = 0.0
+        self.finished = False
+        self.current_frame = None
+
+    def update(self, now):
+        if self.finished:
+            return None
+        if self.started_at is None:
+            self.started_at = now
+            self.next_update_at = now
+        elapsed = now - self.started_at
+        if elapsed >= self.seconds:
+            self.finished = True
+            return None
+        if now < self.next_update_at:
+            return None
+        self.next_update_at = now + self.frame_interval
+        self.current_frame = breath_frame(elapsed, color=self.base, speed=1.0, minf=0.3, maxf=0.9)
+        return self.current_frame
+
+    def is_finished(self):
+        return self.finished
+
+def _fade_level_frames(from_lvl, to_lvl, ms_total):
+    return list(fade_all(from_lvl=from_lvl, to_lvl=to_lvl, ms_total=ms_total))
+
+def make_game_start_animation(system_key=None, rom_key=None):
+    layout = lookup_start_layout(system_key, rom_key)
+    if layout:
+        return TimedFramesAnimation([layout], frame_ms=1000, hold_last_ms=1000)
+    accent = system_accent(system_key) or (0,64,0,BRIGHT_LIMIT)
+    frames = list(wipe_frames(color=accent, step_ms=40))
+    frames.append(solid(0,0,0,18))
+    return TimedFramesAnimation(frames, frame_ms=40, hold_last_ms=250)
+
+def make_game_end_animation():
+    frames = list(wipe_frames(color=(64,0,0,BRIGHT_LIMIT), step_ms=40))
+    frames.extend(_fade_level_frames(from_lvl=28, to_lvl=10, ms_total=600))
+    return TimedFramesAnimation(frames, frame_ms=40)
+
+def make_shutdown_animation():
+    frames = []
+    for _ in range(3):
+        frames.append(solid(0,0,0,BRIGHT_LIMIT))
+        frames.append(solid(0,0,0,8))
+    frames.extend(_fade_level_frames(from_lvl=24, to_lvl=0, ms_total=900))
+    return TimedFramesAnimation(frames, frame_ms=80)
+
+def make_reboot_animation():
+    frames = list(wipe_frames(color=(0,64,0,BRIGHT_LIMIT), step_ms=35))
+    frames.extend(wipe_frames(color=(64,0,0,BRIGHT_LIMIT), step_ms=35))
+    frames.extend(_fade_level_frames(from_lvl=28, to_lvl=0, ms_total=500))
+    return TimedFramesAnimation(frames, frame_ms=35)
+
+def make_settings_changed_animation():
+    col = (32,32,0,BRIGHT_LIMIT)
+    frames = []
+    for _ in range(3):
+        frames.append(solid(*col))
+        frames.append(all_off())
+    return TimedFramesAnimation(frames, frame_ms=100)
+
 def read_es_state(path=ES_STATE):
     out = {}
     try:
@@ -283,13 +383,13 @@ def wipe_frames(color=(0,64,64,BRIGHT_LIMIT), step_ms=50):
     for i in range(NUM_LEDS):
         cols = all_off()
         for k in range(i+1): cols[k] = color
-        yield cols; time.sleep(step_ms/1000)
+        yield cols
 
 def fade_all(from_lvl=40, to_lvl=0, ms_total=700):
     steps = max(1, int(ms_total/20))
     for s in range(steps+1):
         lvl = _clamp(int(lerp(from_lvl, to_lvl, s/steps)))
-        yield solid(0,0,0,lvl); time.sleep(0.02)
+        yield solid(0,0,0,lvl)
 
 # ---------- layouts from config ----------
 def cols_from_layout(layout):
@@ -351,9 +451,7 @@ def _pattern_linear(direction, color_on=(0,0,255,40), color_off=(0,0,0,0), delay
     :param color_off: Color tuple (b,g,r,br) for deactivated LEDs
     :param delay: Delay between steps in seconds
     
-    Note: time.sleep() is used intentionally within this generator to control
-    animation timing. This is called from idle_attract() which runs in the main
-    event loop and is designed to yield control at regular intervals.
+    Timing is controlled by the main daemon loop.
     """
     if not _coord_map:
         return  # No coordinate mapping available
@@ -371,7 +469,6 @@ def _pattern_linear(direction, color_on=(0,0,255,40), color_off=(0,0,0,0), delay
     # Initialize all LEDs to off color
     cols = [color_off] * NUM_LEDS
     yield cols
-    time.sleep(delay)
     
     # Determine iteration order based on direction
     if direction == 'left_to_right':
@@ -380,28 +477,24 @@ def _pattern_linear(direction, color_on=(0,0,255,40), color_off=(0,0,0,0), delay
                 if coord[0] == x and led_idx < NUM_LEDS:
                     cols[led_idx] = color_on
             yield cols
-            time.sleep(delay)
     elif direction == 'right_to_left':
         for x in range(max_x, min_x - 1, -1):
             for coord, led_idx in _coord_map.items():
                 if coord[0] == x and led_idx < NUM_LEDS:
                     cols[led_idx] = color_on
             yield cols
-            time.sleep(delay)
     elif direction == 'top_to_bottom':
         for y in range(min_y, max_y + 1):
             for coord, led_idx in _coord_map.items():
                 if coord[1] == y and led_idx < NUM_LEDS:
                     cols[led_idx] = color_on
             yield cols
-            time.sleep(delay)
     elif direction == 'bottom_to_top':
         for y in range(max_y, min_y - 1, -1):
             for coord, led_idx in _coord_map.items():
                 if coord[1] == y and led_idx < NUM_LEDS:
                     cols[led_idx] = color_on
             yield cols
-            time.sleep(delay)
 
 def _pattern_radial(direction, color_on=(0,0,255,40), color_off=(0,0,0,0), delay=0.05):
     """
@@ -442,14 +535,12 @@ def _pattern_radial(direction, color_on=(0,0,255,40), color_off=(0,0,0,0), delay
     # Initialize all LEDs to off color
     cols = [color_off] * NUM_LEDS
     yield cols
-    time.sleep(delay)
     
     # Activate LEDs in order
     for angle, coord, led_idx in coord_angles:
         if led_idx < NUM_LEDS:
             cols[led_idx] = color_on
         yield cols
-        time.sleep(delay)
 
 def _pattern_circular(direction, color_on=(0,0,255,40), color_off=(0,0,0,0), delay=0.05):
     """
@@ -490,7 +581,6 @@ def _pattern_circular(direction, color_on=(0,0,255,40), color_off=(0,0,0,0), del
     # Initialize all LEDs to off color
     cols = [color_off] * NUM_LEDS
     yield cols
-    time.sleep(delay)
     
     # Group by distance and activate in steps
     current_distance = None
@@ -500,7 +590,6 @@ def _pattern_circular(direction, color_on=(0,0,255,40), color_off=(0,0,0,0), del
         if current_distance != rounded_distance:
             current_distance = rounded_distance
             yield cols
-            time.sleep(delay)
         if led_idx < NUM_LEDS:
             cols[led_idx] = color_on
     
@@ -527,9 +616,6 @@ def _pattern_sequential_colors(num_leds=7, dwell_ms=500, fade_steps=60, fade_ms=
         (255, 255, 255, brightness),  # White
     ]
     
-    dwell_sec = dwell_ms / 1000.0
-    fade_sec = fade_ms / 1000.0
-    
     # Initialize all LEDs to off
     cols = [(0, 0, 0, 0)] * NUM_LEDS
     
@@ -542,7 +628,6 @@ def _pattern_sequential_colors(num_leds=7, dwell_ms=500, fade_steps=60, fade_ms=
         for color in colors:
             cols[led_idx] = color
             yield list(cols)  # Yield a copy, not the same list object
-            time.sleep(dwell_sec)
     
     # After all LEDs complete, fade all to off
     # Create a snapshot of the final state
@@ -562,44 +647,6 @@ def _pattern_sequential_colors(num_leds=7, dwell_ms=500, fade_steps=60, fade_ms=
                 faded_cols.append((0, 0, 0, 0))
         
         yield faded_cols
-        time.sleep(fade_sec)
-
-# ---------- event animations ----------
-def anim_menu_pulse(ser, accent=None, seconds=2.0):
-    base = accent if accent else default_menu_color()
-    t0=time.monotonic()
-    while (time.monotonic()-t0) < seconds:
-        cols = breath_frame(time.monotonic(), color=base, speed=1.0, minf=0.3, maxf=0.9)
-        send_colors(ser, cols); time.sleep(1.0/FPS)
-
-def anim_game_start(ser, system_key=None, rom_key=None):
-    layout = lookup_start_layout(system_key, rom_key)
-    if layout:
-        send_colors(ser, layout); time.sleep(1.0); return
-    accent = system_accent(system_key) or (0,64,0,BRIGHT_LIMIT)
-    for cols in wipe_frames(color=accent, step_ms=40): send_colors(ser, cols)
-    send_colors(ser, solid(0,0,0,18)); time.sleep(0.25)
-
-def anim_game_end(ser):
-    for cols in wipe_frames(color=(64,0,0,BRIGHT_LIMIT), step_ms=40): send_colors(ser, cols)
-    for cols in fade_all(from_lvl=28, to_lvl=10, ms_total=600): send_colors(ser, cols)
-
-def anim_shutdown(ser):
-    for _ in range(3):
-        send_colors(ser, solid(0,0,0,BRIGHT_LIMIT)); time.sleep(0.08)
-        send_colors(ser, solid(0,0,0,8)); time.sleep(0.1)
-    for cols in fade_all(from_lvl=24, to_lvl=0, ms_total=900): send_colors(ser, cols)
-
-def anim_reboot(ser):
-    for cols in wipe_frames(color=(0,64,0,BRIGHT_LIMIT), step_ms=35): send_colors(ser, cols)
-    for cols in wipe_frames(color=(64,0,0,BRIGHT_LIMIT), step_ms=35): send_colors(ser, cols)
-    for cols in fade_all(from_lvl=28, to_lvl=0, ms_total=500): send_colors(ser, cols)
-
-def anim_settings_changed(ser):
-    col=(32,32,0,BRIGHT_LIMIT)
-    for _ in range(3):
-        send_colors(ser, solid(*col)); time.sleep(0.12)
-        send_colors(ser, all_off());   time.sleep(0.08)
 
 def idle_menu(accent=None):
     base = accent if accent else default_menu_color()
@@ -818,6 +865,7 @@ def main():
 
     current_state = make_state(STATE_MENU)
     current_idle = idle_for_state(current_state)
+    active_animation = None
     last_idle = 0.0
 
     rdr, dummy_w = open_fifo_reader()
@@ -827,7 +875,7 @@ def main():
     try:
         while running:
             usb.ensure_connection(time.monotonic())
-            events = poll.poll(50)  # 50ms
+            events = poll.poll(20)  # 20ms
             if events:
                 try:
                     line = rdr.readline()
@@ -852,46 +900,45 @@ def main():
 
                             if name == "menu":
                                 accent = system_accent(syskey)
-                                anim_menu_pulse(output, accent=accent, seconds=2.0)
                                 current_state = set_state(current_state, make_state(STATE_MENU, system_key=syskey))
                                 current_idle = idle_for_state(current_state)
+                                active_animation = MenuPulseAnimation(accent=accent, seconds=2.0)
 
                             elif name == "game-start":
-                                anim_game_start(output, system_key=syskey, rom_key=romkey)
                                 current_state = set_state(
                                     current_state,
                                     make_state(STATE_GAME_RUNNING, system_key=syskey, rom_key=romkey),
                                 )
                                 current_idle = idle_for_state(current_state)
+                                active_animation = make_game_start_animation(system_key=syskey, rom_key=romkey)
 
                             elif name == "game-end":
-                                anim_game_end(output)
                                 current_state = set_state(current_state, make_state(STATE_MENU, system_key=syskey))
                                 current_idle = idle_for_state(current_state)
+                                active_animation = make_game_end_animation()
 
                             elif name == "shutdown":
-                                anim_shutdown(output)
                                 current_state = set_state(current_state, make_state(STATE_SHUTDOWN))
                                 current_idle = idle_for_state(current_state)
-                                send_state_frame(output, current_state)
+                                active_animation = make_shutdown_animation()
 
                             elif name == "reboot":
-                                anim_reboot(output)
                                 current_state = set_state(current_state, make_state(STATE_REBOOT))
                                 current_idle = idle_for_state(current_state)
-                                send_state_frame(output, current_state)
+                                active_animation = make_reboot_animation()
 
                             elif name in ("settings-changed","controls-changed"):
-                                anim_settings_changed(output)
-                                send_state_frame(output, current_state)
+                                active_animation = make_settings_changed_animation()
 
                             elif name == "attract-on":
                                 current_state = set_state(current_state, make_state(STATE_ATTRACT))
                                 current_idle = idle_for_state(current_state)
+                                active_animation = None
 
                             elif name == "attract-off":
                                 current_state = set_state(current_state, make_state(STATE_MENU, system_key=syskey))
                                 current_idle = idle_for_state(current_state)
+                                active_animation = None
 
                             elif name == "solid":
                                 b=int(evt.get("b",0)); g=int(evt.get("g",0)); r=int(evt.get("r",0)); br=int(evt.get("br",24))
@@ -900,11 +947,13 @@ def main():
                                     make_state(STATE_SOLID, color=(b,g,r,br)),
                                 )
                                 current_idle = idle_for_state(current_state)
+                                active_animation = None
                                 send_state_frame(output, current_state, fade=True)
 
                             elif name == "off":
                                 current_state = set_state(current_state, make_state(STATE_OFF))
                                 current_idle = idle_for_state(current_state)
+                                active_animation = None
                                 send_state_frame(output, current_state, fade=True)
 
                         last_idle = 0.0  # next idle immediately
@@ -912,7 +961,17 @@ def main():
             now = time.monotonic()
             output.update(now)
 
-            if current_idle is not None and now - last_idle >= (1.0/30.0):
+            if active_animation is not None:
+                frame = active_animation.update(now)
+                if frame is not None:
+                    send_colors(output, frame)
+                    last_idle = now
+                if active_animation.is_finished():
+                    active_animation = None
+                    if current_idle is None:
+                        send_state_frame(output, current_state)
+
+            elif current_idle is not None and now - last_idle >= (1.0/30.0):
                 try: cols = next(current_idle)
                 except StopIteration:
                     current_state = set_state(current_state, make_state(STATE_MENU))

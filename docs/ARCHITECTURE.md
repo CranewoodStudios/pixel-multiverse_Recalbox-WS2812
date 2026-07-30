@@ -131,6 +131,17 @@ Frame output tracks the last generated frame. Persistent fixed states such as
 target frame. Fade updates are advanced from the main daemon loop using
 monotonic time and return control immediately after at most one generated frame.
 
+## Animation Loop
+
+Command animations are advanced by the main daemon loop instead of owning their
+own sleep loops. Each pass through the loop can process FIFO input, check USB
+reconnect state, advance an active fade, advance at most one active animation
+frame, and then return to polling.
+
+New commands replace any active command animation. Idle menu and attract output
+only runs when no command animation is active, and frames are rate-limited by
+monotonic time.
+
 ## Deployment Architecture
 
 The repository keeps source files under `recalbox/`. The deployed Recalbox
