@@ -69,6 +69,7 @@ archive/                Historical or uncertain files kept for reference
 - `docs/USB_PROTOCOL.md` describes the host USB CDC frame format.
 - `docs/DEVELOPMENT.md` describes desktop development and checks.
 - `docs/PICADE_INTEGRATION.md` describes the external firmware relationship.
+- `docs/ROADMAP.md` tracks future work without adding speculative code.
 
 ## Runtime Paths
 
