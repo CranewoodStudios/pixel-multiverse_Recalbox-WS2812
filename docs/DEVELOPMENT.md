@@ -51,6 +51,12 @@ USB reconnect checks should include daemon startup without the controller
 connected, issuing commands while disconnected, reconnecting or resetting the
 controller, and confirming the latest LED state is sent after reconnect.
 
+For verbose daemon diagnostics during development:
+
+```sh
+PM_LOG_LEVEL=DEBUG /usr/bin/python3 recalbox/pm_daemon.py
+```
+
 Manual USB CDC frame testing is available through:
 
 ```sh

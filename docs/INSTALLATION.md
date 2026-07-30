@@ -66,6 +66,12 @@ and redirects daemon output to:
 /var/log/pm_daemon.log
 ```
 
+Daemon verbosity can be changed with `PM_LOG_LEVEL`, for example:
+
+```sh
+PM_LOG_LEVEL=DEBUG /usr/bin/python3 /recalbox/share/pixel-multiverse/pm_daemon.py
+```
+
 Current expected event script installation depends on the Recalbox event hook
 location used by the target system. The scripts themselves are kept lightweight
 and call `/recalbox/share/pixel-multiverse/pmctl`.
@@ -89,6 +95,8 @@ If LEDs do not respond:
 - Confirm the firmware exposes a USB CDC serial device.
 - Check `/var/log/pm_daemon.log`.
 - Look for `USB reconnect`, `USB connected`, or `USB disconnected` messages.
+- Useful log categories include `pm.daemon`, `pm.fifo`, `pm.usb`,
+  `pm.config`, `pm.animation`, and `pm.state`.
 - Confirm `/tmp/pm.fifo` exists after daemon startup.
 - Run `sh /recalbox/share/pixel-multiverse/pmctl menu` and check for FIFO
   errors.

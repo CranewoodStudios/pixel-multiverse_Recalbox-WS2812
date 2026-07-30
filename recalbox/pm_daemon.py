@@ -3,7 +3,7 @@
 # Reads JSON lines from /tmp/pm.fifo and drives Plasma 2040 bridge:
 #   frame = b"multiverse:data" + N*(B,G,R,br)
 
-import os, sys, time, json, math, signal, select
+import os, sys, time, json, math, signal, select, logging
 
 # ---------- CONFIG ----------
 NUM_LEDS = 7
@@ -22,6 +22,17 @@ ES_STATE = "/tmp/es_state.inf"
 HEADER = b"multiverse:data"
 # --------------------------------
 
+def configure_logging():
+    level_name = os.environ.get("PM_LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+    logging.basicConfig(
+        level=level,
+        format="[pm] %(levelname)s %(name)s: %(message)s",
+        stream=sys.stdout,
+    )
+
+configure_logging()
+
 # pyserial (installed via pip --target /recalbox/share/pythonlibs)
 USER_SITE = "/recalbox/share/pythonlibs"
 if os.path.isdir(USER_SITE) and USER_SITE not in sys.path:
@@ -29,7 +40,7 @@ if os.path.isdir(USER_SITE) and USER_SITE not in sys.path:
 try:
     import serial   # type: ignore
 except Exception as e:
-    print("[pm] FATAL: pyserial not available:", e, flush=True)
+    logging.getLogger("pm.daemon").error("pyserial not available: %s", e)
     sys.exit(1)
 
 running = True
@@ -39,7 +50,8 @@ def _stop(*_):
 signal.signal(signal.SIGINT, _stop)
 signal.signal(signal.SIGTERM, _stop)
 
-def log(*a): print("[pm]", *a, flush=True)
+def log(*a, level=logging.INFO, category="daemon"):
+    logging.getLogger("pm." + category).log(level, " ".join(str(x) for x in a))
 def _clamp(x, lo=0, hi=255): return lo if x < lo else hi if x > hi else x
 def lerp(a,b,t): return a + (b-a)*t
 
@@ -164,11 +176,17 @@ def states_equal(left, right):
         left.get("color") == right.get("color")
     )
 
+def _call_log(log_func, *args, **kwargs):
+    try:
+        log_func(*args, **kwargs)
+    except TypeError:
+        log_func(*args)
+
 def set_state(current_state, next_state, log_func=log):
     if states_equal(current_state, next_state):
-        log_func("state unchanged:", state_label(next_state))
+        _call_log(log_func, "state unchanged:", state_label(next_state), category="state")
         return current_state
-    log_func("state change:", state_label(current_state), "->", state_label(next_state))
+    _call_log(log_func, "state change:", state_label(current_state), "->", state_label(next_state), category="state")
     return next_state
 
 def idle_for_state(state):
@@ -319,7 +337,7 @@ def _read_json_config(path, default_value):
         with open(path, "r") as f:
             data = json.load(f)
     except FileNotFoundError:
-        log(os.path.basename(path), "not found at", path)
+        log(os.path.basename(path), "not found at", path, level=logging.WARNING, category="config")
         return default_value
     if not isinstance(data, dict):
         raise ValueError(f"{path} must contain a JSON object")
@@ -381,17 +399,18 @@ def reload_runtime_config():
     buttons_cfg = _read_json_config(BUTTONS_JSON, {})
     num_leds, order, coord_map, pattern_queue = _build_button_derived(buttons_cfg)
     apply_runtime_config(systems_cfg, buttons_cfg, num_leds, order, coord_map, pattern_queue)
-    log("loaded systems.json:", ",".join(sorted(_cfg.keys())))
-    log("loaded buttons.json:", f"{len(_coord_map)} LEDs mapped, {len(_pattern_queue)} patterns")
+    log("loaded systems.json:", ",".join(sorted(_cfg.keys())), category="config")
+    log("loaded buttons.json:", f"{len(_coord_map)} LEDs mapped, {len(_pattern_queue)} patterns", category="config")
     return True
 
 def reload_runtime_config_safely():
     try:
         reload_runtime_config()
-        log("configuration reload complete")
+        log("configuration reload complete", category="config")
         return True
     except Exception as e:
-        log("configuration reload failed; keeping previous configuration:", e)
+        log("configuration reload failed; keeping previous configuration:", e,
+            level=logging.ERROR, category="config")
         return False
 
 def get_system_key(evt):
@@ -748,7 +767,7 @@ def ensure_fifo(path=FIFO_PATH):
             os.mkfifo(path, 0o666)
             os.chmod(path, 0o666)
     except Exception as e:
-        log("mkfifo failed:", e)
+        log("mkfifo failed:", e, level=logging.ERROR, category="fifo")
 
 def stat_is_fifo(path):
     try:
@@ -893,9 +912,9 @@ def main():
     reload_runtime_config_safely()
     ensure_fifo()
 
-    usb = SerialConnection()
+    usb = SerialConnection(log_func=lambda *a: log(*a, category="usb"))
     output = FrameOutput(usb)
-    log("daemon started; FIFO =", FIFO_PATH)
+    log("daemon started; FIFO =", FIFO_PATH, category="daemon")
 
     current_state = make_state(STATE_MENU)
     current_idle = idle_for_state(current_state)
@@ -938,6 +957,7 @@ def main():
                                 current_state = set_state(current_state, make_state(STATE_MENU, system_key=syskey))
                                 current_idle = idle_for_state(current_state)
                                 active_animation = MenuPulseAnimation(accent=accent, seconds=2.0)
+                                log("started menu pulse", category="animation")
 
                             elif name == "game-start":
                                 current_state = set_state(
@@ -946,24 +966,29 @@ def main():
                                 )
                                 current_idle = idle_for_state(current_state)
                                 active_animation = make_game_start_animation(system_key=syskey, rom_key=romkey)
+                                log("started game-start animation", category="animation")
 
                             elif name == "game-end":
                                 current_state = set_state(current_state, make_state(STATE_MENU, system_key=syskey))
                                 current_idle = idle_for_state(current_state)
                                 active_animation = make_game_end_animation()
+                                log("started game-end animation", category="animation")
 
                             elif name == "shutdown":
                                 current_state = set_state(current_state, make_state(STATE_SHUTDOWN))
                                 current_idle = idle_for_state(current_state)
                                 active_animation = make_shutdown_animation()
+                                log("started shutdown animation", category="animation")
 
                             elif name == "reboot":
                                 current_state = set_state(current_state, make_state(STATE_REBOOT))
                                 current_idle = idle_for_state(current_state)
                                 active_animation = make_reboot_animation()
+                                log("started reboot animation", category="animation")
 
                             elif name in ("settings-changed","controls-changed"):
                                 active_animation = make_settings_changed_animation()
+                                log("started settings notification animation", category="animation")
 
                             elif name == "attract-on":
                                 current_state = set_state(current_state, make_state(STATE_ATTRACT))
@@ -1003,6 +1028,7 @@ def main():
                     last_idle = now
                 if active_animation.is_finished():
                     active_animation = None
+                    log("animation finished", category="animation")
                     if current_idle is None:
                         send_state_frame(output, current_state)
 
@@ -1023,7 +1049,7 @@ def main():
             poll.unregister(rdr); rdr.close(); dummy_w.close()
             if os.path.exists(FIFO_PATH): os.chmod(FIFO_PATH, 0o666)
         except Exception: pass
-        log("daemon stopped")
+        log("daemon stopped", category="daemon")
 
 if __name__ == "__main__":
     main()
