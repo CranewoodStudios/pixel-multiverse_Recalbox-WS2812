@@ -18,6 +18,3 @@ case "$cmd" in
     echo "usage: $0 menu|game-start|game-end|shutdown|reboot|settings-changed|controls-changed|attract-on|attract-off|off|solid B G R BR|reload-config" >&2
     exit 2 ;;
 esac
-SH
-sed -i 's/\r$//' /recalbox/share/pixel-multiverse/pmctl
-chmod +x /recalbox/share/pixel-multiverse/pmctl
