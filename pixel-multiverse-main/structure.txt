@@ -1,0 +1,19 @@
+Folder PATH listing for volume Extern
+Volume serial number is 16C1-3CF2
+F:.
+
+
+PYTHONPATH="/recalbox/share/pylibs:/recalbox/share/pixel-multiverse/src" \
+python3 - <<'PY'
+from time import sleep
+from pixelpusher.buttons import PlasmaButtons
+from pixelpusher.colors import RGBl
+pb = PlasmaButtons(num_leds=6, serial_port_path="/dev/ttyACM0", refresh_rate=60)
+pb.set_led_mode(0, 'normal', color_to=RGBl(31,0,0,5))
+sleep(3)
+pb.stop()
+PY
+
+
+PYTHONPATH="/recalbox/share/pylibs:/recalbox/share/pixel-multiverse/src" \
+python3 /recalbox/share/pixel-multiverse/examples.py --port /dev/ttyACM0 --num 7
